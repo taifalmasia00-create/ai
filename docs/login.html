@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>تسجيل الدخول — IT_qan Line</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800;900&family=Tajawal:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="noise-layer"></div>
+
+<main class="login-wrap">
+  <div class="login-card">
+    <div class="login-mark">IQ</div>
+    <h1 class="login-title">IT_qan <em>Line</em></h1>
+    <p class="login-sub">اكتب كلمة السر عشان تدخل</p>
+
+    <form id="loginForm" class="login-form">
+      <input type="password" id="password" placeholder="كلمة السر" autofocus required>
+      <button type="submit" class="btn-primary" id="loginBtn">دخول</button>
+    </form>
+
+    <p class="login-error" id="loginError" hidden></p>
+  </div>
+</main>
+
+<script src="config.js"></script>
+<script>
+const form = document.getElementById('loginForm');
+const errorEl = document.getElementById('loginError');
+const loginBtn = document.getElementById('loginBtn');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  errorEl.hidden = true;
+  loginBtn.disabled = true;
+
+  const password = document.getElementById('password').value;
+
+  try {
+    const res = await fetch(`${window.APP_CONFIG.SUPABASE_FUNCTIONS_URL}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || 'فشل الدخول');
+
+    if (data.token) {
+      localStorage.setItem('app_token', data.token);
+    }
+    window.location.href = 'index.html';
+  } catch (err) {
+    errorEl.textContent = err.message;
+    errorEl.hidden = false;
+    loginBtn.disabled = false;
+  }
+});
+</script>
+
+</body>
+</html>
