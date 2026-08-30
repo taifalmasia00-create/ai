@@ -90,7 +90,15 @@ async function api(path, options = {}) {
       headers: authHeaders({ 'Content-Type': 'application/json', ...(options.headers || {}) }),
     });
   } catch (networkErr) {
-    const e = new Error('تعذر الاتصال بالسيرفر، تأكد من اتصال النت');
+    // لو الجهاز نفسه فعلاً أوفلاين، ده سبب واضح. لو لأ (يعني عندك نت
+    // شغال زي ما يوضحه navigator.onLine)، الأرجح إن الانقطاع مؤقت من
+    // ناحية السيرفر مش من ناحيتك — بنوضح الفرق للمستخدم بدل ما نتهم نته دايماً.
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    const e = new Error(
+      offline
+        ? 'مفيش اتصال إنترنت على الجهاز دلوقتي'
+        : 'تعذر الوصول للسيرفر مؤقتاً (مش بالضرورة مشكلة في نتك)',
+    );
     e.isRetryable = true;
     throw e;
   }
@@ -381,7 +389,7 @@ startBtn.addEventListener('click', async () => {
 // ---------- المعالجة صف بصف (كل نداء process-step بيعالج خطوة واحدة، ويعدّل
 // خلية واحدة في نفس ملف الإكسيل الأصلي ويحفظه) ----------
 let reconnectAttempts = 0;
-const MAX_AUTO_RETRIES = 5;
+const MAX_AUTO_RETRIES = 10;
 
 async function pollStep() {
   try {
@@ -446,8 +454,8 @@ async function pollStep() {
     }
 
     if (err.isRetryable) {
-      beltStatus.textContent = 'فيه مشكلة مستمرة في الاتصال';
-      quotaPauseText.textContent = 'جربنا كذا مرة تلقائي ومكملناش. اتأكد من اتصال النت، وبعدين دوس على الزرار عشان تكمل.';
+      beltStatus.textContent = 'فيه مشكلة مستمرة في الوصول للسيرفر';
+      quotaPauseText.textContent = err.message + '. جربنا نتصل تلقائي كذا مرة ومكملناش. الشغلانة محفوظة وهتكمل من نفس المكان — دوس الزرار لما تحب تجرب تاني.';
       resumeBtn.textContent = 'حاول تاني';
       quotaPause.hidden = false;
       return;
