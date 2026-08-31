@@ -11,8 +11,8 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import * as XLSX from 'https://esm.sh/xlsx@0.18.5';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+import * as XLSX from 'npm:xlsx@0.18.5';
 
 function getAdminClient() {
   return createClient(

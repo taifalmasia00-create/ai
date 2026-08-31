@@ -11,7 +11,8 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+import * as XLSX from 'npm:xlsx@0.18.5';
 
 function getAdminClient() {
   return createClient(
@@ -39,7 +40,6 @@ async function checkAuth(req: Request): Promise<boolean> {
   return true;
 }
 
-// بيحول نص base64 لـ bytes خام عشان نرجعه زي ما هو كملف
 function base64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -51,6 +51,69 @@ function safeFileName(name: string | null | undefined): string {
   const base = (name || 'result').replace(/\.[^./\\]+$/, '');
   const cleaned = base.replace(/["\\]/g, '').trim() || 'result';
   return `${cleaned}.xlsx`;
+}
+
+// بتطبّق كل نتائج الـ AI المتجمعة في عمود results (مفتاح كل نتيجة شكله
+// "rowIndex:columnName") على خلايا الملف الأصلي، وتضيف عمود هدف جديد
+// لو مش موجود أصلاً في الملف.
+//
+// ملحوظة مهمة: الدالة دي كانت ناقصة قبل كده — الفنكشن كانت بترجع نفس
+// الملف الأصلي زي ما هو من غير ما تطبّق أي نتيجة عليه خالص، يعني الملف
+// اللي بينزل للمستخدم كان مفيهوش أي حاجة اتعملتها المعالجة.
+function applyResultsToWorkbook(
+  fileBase64: string,
+  sheetNameHint: string | null,
+  headers: string[],
+  results: Record<string, string>,
+): string {
+  const workbook = XLSX.read(fileBase64, { type: 'base64' });
+  const sheetName = sheetNameHint && workbook.Sheets[sheetNameHint] ? sheetNameHint : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet || !sheet['!ref']) throw new Error('الشيت غير موجود في الملف');
+
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const headerRow = range.s.r;
+
+  // خريطة اسم العمود -> رقم العمود، مبنية على أسماء الأعمدة اللي اتحسبت
+  // وقت الرفع (نفس ترتيب الملف الأصلي بالظبط)
+  const colIndexByHeader = new Map<string, number>();
+  headers.forEach((h, idx) => colIndexByHeader.set(h, range.s.c + idx));
+
+  let maxCol = range.e.c;
+  let maxRow = range.e.r;
+
+  for (const [key, value] of Object.entries(results)) {
+    const sepIdx = key.indexOf(':');
+    if (sepIdx === -1) continue;
+    const rowIndex = parseInt(key.slice(0, sepIdx), 10);
+    const columnName = key.slice(sepIdx + 1);
+    if (Number.isNaN(rowIndex) || !columnName) continue;
+
+    let colIdx = colIndexByHeader.get(columnName);
+    if (colIdx === undefined) {
+      // عمود هدف جديد مش موجود في الملف الأصلي: نضيفه في آخر عمود ونكتب
+      // اسمه في صف العناوين
+      maxCol += 1;
+      colIdx = maxCol;
+      colIndexByHeader.set(columnName, colIdx);
+      const headerAddr = XLSX.utils.encode_cell({ r: headerRow, c: colIdx });
+      sheet[headerAddr] = { t: 's', v: columnName };
+    }
+
+    const r = headerRow + 1 + rowIndex;
+    const addr = XLSX.utils.encode_cell({ r, c: colIdx });
+    sheet[addr] = { t: 's', v: value };
+
+    if (r > maxRow) maxRow = r;
+  }
+
+  if (maxCol > range.e.c || maxRow > range.e.r) {
+    range.e.c = maxCol;
+    range.e.r = maxRow;
+    sheet['!ref'] = XLSX.utils.encode_range(range);
+  }
+
+  return XLSX.write(workbook, { type: 'base64', bookType: 'xlsx' });
 }
 
 Deno.serve(async (req: Request) => {
@@ -68,7 +131,7 @@ Deno.serve(async (req: Request) => {
     const supabase = getAdminClient();
     const { data: job, error } = await supabase
       .from('jobs')
-      .select('status, original_file_b64, original_filename')
+      .select('status, original_file_b64, original_filename, sheet_name, headers, results')
       .eq('id', jobId)
       .maybeSingle();
 
@@ -80,10 +143,16 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: 'الملف غير موجود' }, 404);
     }
 
-    // ده بالظبط نفس الملف اللي رفعه المستخدم، بعد ما اتعدّلت فيه خلايا
-    // أعمدة الهدف بس — مش ملف جديد اتبنى من الصفر، فبنية الملف الأصلية
-    // (باقي الشيتات، التنسيق، الدمج، المعادلات...) فضلت زي ما هي.
-    const bytes = base64ToBytes(job.original_file_b64);
+    // بنفتح نفس الملف اللي رفعه المستخدم، بنطبق عليه كل نتائج المعالجة
+    // المتجمعة في results، ونرجّعه — الملف بيتفتح مرة واحدة بس هنا، لما
+    // المعالجة كلها تكون خلصت، فمفيش أي تأثير على أداء process-step.
+    const resultBase64 = applyResultsToWorkbook(
+      job.original_file_b64,
+      job.sheet_name || null,
+      job.headers || [],
+      job.results || {},
+    );
+    const bytes = base64ToBytes(resultBase64);
 
     return new Response(bytes, {
       status: 200,

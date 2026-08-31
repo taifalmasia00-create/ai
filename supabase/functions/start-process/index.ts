@@ -11,7 +11,8 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+import * as XLSX from 'npm:xlsx@0.18.5';
 
 function getAdminClient() {
   return createClient(
@@ -41,6 +42,44 @@ async function checkAuth(req: Request): Promise<boolean> {
 
 const MAX_INSTRUCTION_LENGTH = 20000; // نفس الحد الموجود في الواجهة (maxlength)
 const MAX_TARGETS = 6;
+
+// بتفتح نفس الملف الأصلي **مرة واحدة بس** هنا، وتستخرج نص الأعمدة المصدر
+// لكل صف وتحطه في مصفوفة نصوص بسيطة (سطر واحد لكل صف). ده اللي بيسمح لـ
+// process-step إنه يبقى "خفيف" ويقرا نص الصف من قاعدة البيانات بدل ما يفتح
+// ملف الإكسيل بتاعي كل مرة.
+//
+// ملحوظة مهمة: الدالة دي كانت ناقصة قبل كده — كان في استدعاء لدالة
+// get_job_source_text في process-step من غير ما حد يملأ source_data
+// أصلاً، فكانت كل خطوة بترجع "إعدادات المعالجة ناقصة" ومفيش أي معالجة
+// بتحصل فعلياً.
+function buildSourceData(fileBase64: string, headers: string[], sourceColumns: string[]): string[] {
+  const workbook = XLSX.read(fileBase64, { type: 'base64' });
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet || !sheet['!ref']) throw new Error('الملف فارغ أو مفيش شيت فيه بيانات');
+
+  const range = XLSX.utils.decode_range(sheet['!ref']);
+  const headerRow = range.s.r;
+
+  // خريطة اسم العمود -> رقم العمود، بنفس ترتيب headers اللي اتحسبت وقت الرفع
+  const colIndexByHeader = new Map<string, number>();
+  headers.forEach((h, idx) => colIndexByHeader.set(h, range.s.c + idx));
+
+  const rows: string[] = [];
+  for (let r = headerRow + 1; r <= range.e.r; r++) {
+    const parts: string[] = [];
+    for (const col of sourceColumns) {
+      const c = colIndexByHeader.get(col);
+      if (c === undefined) continue;
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = sheet[addr];
+      const v = cell && cell.v !== undefined && cell.v !== null ? String(cell.v) : '';
+      parts.push(`${col}: ${v}`);
+    }
+    rows.push(parts.join('\n'));
+  }
+  return rows;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -131,11 +170,20 @@ Deno.serve(async (req: Request) => {
     const rowCount = job.row_count || 0;
     const total = rowCount * cleanTargets.length;
 
+    let sourceData: string[];
+    try {
+      sourceData = buildSourceData(job.original_file_b64, headers, cleanSourceColumns);
+    } catch (e) {
+      return jsonResponse({ error: 'تعذر قراءة بيانات الأعمدة المصدر من الملف: ' + String(e?.message || e) }, 500);
+    }
+
     const { error: updateErr } = await supabase
       .from('jobs')
       .update({
         source_columns: cleanSourceColumns,
         targets: cleanTargets,
+        source_data: sourceData,
+        results: {},
         status: 'processing',
         processed: 0,
         total,

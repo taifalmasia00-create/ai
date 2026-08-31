@@ -11,7 +11,11 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+// تم التغيير من https://esm.sh/@supabase/supabase-js@2 إلى npm:
+// السبب: esm.sh بيحتاج يجيب الكود من الإنترنت وقت الـ cold start، وده كان
+// بيستهلك وقت/موارد وبيسبب أخطاء 546 (WORKER_LIMIT) بشكل متقطع. npm: بتتحمّل
+// وتتخزّن بشكل أفضل جوه بيئة Supabase.
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
 function getAdminClient() {
   return createClient(
