@@ -111,12 +111,6 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabase = getAdminClient();
-    // ملحوظة: مبقاش محتاجين نجيب original_file_b64 هنا خالص — الخطوة دي
-    // مبتفتحش الملف، بتشتغل بس على نص الصف المطلوب (بيتجاب لوحده لاحقاً
-    // بدالة get_job_source_text) وبتضيف نتيجة صغيرة في results. مبنجيبش
-    // مصفوفة source_data كاملة هنا عشان منسحبش/منفكّش بيانات كل الصفوف
-    // في كل نداء — ده كان بيقدر يوصل بموارد الفنكشن لحدها الأقصى مع
-    // الملفات الكبيرة. الملف الأصلي بيتفتح مرة واحدة بس عند التحميل النهائي.
     const { data: job, error: fetchErr } = await supabase
       .from('jobs')
       .select(
@@ -128,9 +122,6 @@ Deno.serve(async (req: Request) => {
     if (fetchErr) throw fetchErr;
     if (!job) return jsonResponse({ error: 'الوظيفة غير موجودة' }, 404);
 
-    // لو المستخدم بعت مفتاح Gemini جديد (مثلاً بعد ما مفتاح السيرفر خلّص
-    // سماحيته)، نحفظه على الوظيفة عشان يُستخدم من الخطوة دي وكل الخطوات
-    // الجاية بدل ما نضطر نوقف المعالجة أو نعيد رفع الملف.
     if (typeof apiKey === 'string' && apiKey.trim()) {
       const trimmedKey = apiKey.trim().slice(0, MAX_API_KEY_LENGTH);
       const { error: keyErr } = await supabase
@@ -141,7 +132,6 @@ Deno.serve(async (req: Request) => {
       job.api_key_override = trimmedKey;
     }
 
-    // خلصت أو فشلت بالفعل - رجّع الحالة الحالية من غير أي شغل
     if (job.status === 'done' || job.status === 'error') {
       return statusResponse(job);
     }
@@ -150,7 +140,6 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: 'لازم تبدأ المعالجة الأول' }, 400);
     }
 
-    // شبكة أمان: احترام المهلة بين كل طلب وطلب حتى لو الكلاينت داس بسرعة أو فتح أكتر من تاب
     if (job.last_processed_at) {
       const elapsed = Date.now() - new Date(job.last_processed_at).getTime();
       if (elapsed < MIN_DELAY_MS) {
@@ -178,12 +167,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const targetsCount = targets.length;
-    const rowIndex = Math.floor(i / targetsCount); // 0-based بين صفوف البيانات
+    const rowIndex = Math.floor(i / targetsCount);
     const target = targets[i % targetsCount];
 
-    // بنجيب نص الصف المطلوب بس (مش المصفوفة كاملة) عن طريق دالة بحث
-    // بالفهرس جوه قاعدة البيانات نفسها — أخف بكتير من نقل وتفكيك كل
-    // صفوف الملف في كل خطوة.
+    // بحث بالفهرس في job_source_rows (جدول منفصل، صف واحد لكل عنصر) —
+    // مفيش فكّ لبلوب JSONB كبير هنا خالص، حتى مع ملفات آلاف الصفوف.
     const { data: sourceTextData, error: sourceErr } = await supabase.rpc('get_job_source_text', {
       p_job_id: jobId,
       p_row_index: rowIndex,
@@ -214,9 +202,6 @@ ${sourceText}
       }
     }
 
-    // لو وقفنا بسبب حد الاستخدام: منزودش processed، بس نحدّث وقت آخر
-    // محاولة عشان نحترم المهلة، ونرجّع للفرونت إند إشارة واضحة إنه محتاج
-    // يستنى ويدوس استكمل، أو يحط مفتاح Gemini API تاني.
     if (quotaPaused) {
       const { error: pauseErr } = await supabase
         .from('jobs')
@@ -232,13 +217,12 @@ ${sourceText}
       });
     }
 
-    // بنسجل النتيجة كمفتاح صغير (rowIndex:columnName) جوه عمود results
-    // بدل ما نفتح الملف الأصلي ونعيد بناءه — ده أخف عملية ممكنة، ومفيش
-    // فيها أي احتمال تايم آوت حتى مع ملفات كبيرة جداً.
-    const resultKey = `${rowIndex}:${target.column}`;
+    // upsert لصف واحد في job_results (جدول منفصل) بدل jsonb_set على بلوب
+    // كبير بيكبر مع كل خطوة.
     const { error: resultErr } = await supabase.rpc('set_job_result', {
       p_job_id: jobId,
-      p_key: resultKey,
+      p_row_index: rowIndex,
+      p_column_name: target.column,
       p_value: resultValue ?? '',
     });
     if (resultErr) throw resultErr;

@@ -40,18 +40,9 @@ async function checkAuth(req: Request): Promise<boolean> {
   return true;
 }
 
-const MAX_INSTRUCTION_LENGTH = 20000; // نفس الحد الموجود في الواجهة (maxlength)
+const MAX_INSTRUCTION_LENGTH = 20000;
 const MAX_TARGETS = 6;
 
-// بتفتح نفس الملف الأصلي **مرة واحدة بس** هنا، وتستخرج نص الأعمدة المصدر
-// لكل صف وتحطه في مصفوفة نصوص بسيطة (سطر واحد لكل صف). ده اللي بيسمح لـ
-// process-step إنه يبقى "خفيف" ويقرا نص الصف من قاعدة البيانات بدل ما يفتح
-// ملف الإكسيل بتاعي كل مرة.
-//
-// ملحوظة مهمة: الدالة دي كانت ناقصة قبل كده — كان في استدعاء لدالة
-// get_job_source_text في process-step من غير ما حد يملأ source_data
-// أصلاً، فكانت كل خطوة بترجع "إعدادات المعالجة ناقصة" ومفيش أي معالجة
-// بتحصل فعلياً.
 function buildSourceData(fileBase64: string, headers: string[], sourceColumns: string[]): string[] {
   const workbook = XLSX.read(fileBase64, { type: 'base64' });
   const sheetName = workbook.SheetNames[0];
@@ -61,7 +52,6 @@ function buildSourceData(fileBase64: string, headers: string[], sourceColumns: s
   const range = XLSX.utils.decode_range(sheet['!ref']);
   const headerRow = range.s.r;
 
-  // خريطة اسم العمود -> رقم العمود، بنفس ترتيب headers اللي اتحسبت وقت الرفع
   const colIndexByHeader = new Map<string, number>();
   headers.forEach((h, idx) => colIndexByHeader.set(h, range.s.c + idx));
 
@@ -177,20 +167,29 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: 'تعذر قراءة بيانات الأعمدة المصدر من الملف: ' + String(e?.message || e) }, 500);
     }
 
+    // بنخزّن نص كل صف في جدول منفصل (صف واحد لكل عنصر) بدل JSONB واحد
+    // كبير — كده process-step هيقرا صف واحد ببحث مفهرس بدل ما يفكّ بلوب
+    // فيه كل الصفوف في كل نداء (ده اللي كان بيسبب 546 مع الملفات الكبيرة).
+    const { error: setRowsErr } = await supabase.rpc('set_job_source_rows', {
+      p_job_id: jobId,
+      p_rows: sourceData,
+    });
+    if (setRowsErr) throw setRowsErr;
+
+    // امسح أي نتايج قديمة لنفس الوظيفة (لو الشغلانة اتشغّلت قبل كده)
+    const { error: clearResultsErr } = await supabase.from('job_results').delete().eq('job_id', jobId);
+    if (clearResultsErr) throw clearResultsErr;
+
     const { error: updateErr } = await supabase
       .from('jobs')
       .update({
         source_columns: cleanSourceColumns,
         targets: cleanTargets,
-        source_data: sourceData,
-        results: {},
         status: 'processing',
         processed: 0,
         total,
         error: null,
         last_processed_at: null,
-        // شغلانة جديدة تبدأ دايماً بمفتاح السيرفر الافتراضي؛ أي مفتاح بديل
-        // اتحط في شغلانة سابقة (لو حصل) بيتصفّر هنا.
         api_key_override: null,
       })
       .eq('id', jobId);

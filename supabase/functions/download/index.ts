@@ -53,13 +53,6 @@ function safeFileName(name: string | null | undefined): string {
   return `${cleaned}.xlsx`;
 }
 
-// بتطبّق كل نتائج الـ AI المتجمعة في عمود results (مفتاح كل نتيجة شكله
-// "rowIndex:columnName") على خلايا الملف الأصلي، وتضيف عمود هدف جديد
-// لو مش موجود أصلاً في الملف.
-//
-// ملحوظة مهمة: الدالة دي كانت ناقصة قبل كده — الفنكشن كانت بترجع نفس
-// الملف الأصلي زي ما هو من غير ما تطبّق أي نتيجة عليه خالص، يعني الملف
-// اللي بينزل للمستخدم كان مفيهوش أي حاجة اتعملتها المعالجة.
 function applyResultsToWorkbook(
   fileBase64: string,
   sheetNameHint: string | null,
@@ -74,8 +67,6 @@ function applyResultsToWorkbook(
   const range = XLSX.utils.decode_range(sheet['!ref']);
   const headerRow = range.s.r;
 
-  // خريطة اسم العمود -> رقم العمود، مبنية على أسماء الأعمدة اللي اتحسبت
-  // وقت الرفع (نفس ترتيب الملف الأصلي بالظبط)
   const colIndexByHeader = new Map<string, number>();
   headers.forEach((h, idx) => colIndexByHeader.set(h, range.s.c + idx));
 
@@ -91,8 +82,6 @@ function applyResultsToWorkbook(
 
     let colIdx = colIndexByHeader.get(columnName);
     if (colIdx === undefined) {
-      // عمود هدف جديد مش موجود في الملف الأصلي: نضيفه في آخر عمود ونكتب
-      // اسمه في صف العناوين
       maxCol += 1;
       colIdx = maxCol;
       colIndexByHeader.set(columnName, colIdx);
@@ -131,7 +120,7 @@ Deno.serve(async (req: Request) => {
     const supabase = getAdminClient();
     const { data: job, error } = await supabase
       .from('jobs')
-      .select('status, original_file_b64, original_filename, sheet_name, headers, results')
+      .select('status, original_file_b64, original_filename, sheet_name, headers')
       .eq('id', jobId)
       .maybeSingle();
 
@@ -143,14 +132,18 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: 'الملف غير موجود' }, 404);
     }
 
-    // بنفتح نفس الملف اللي رفعه المستخدم، بنطبق عليه كل نتائج المعالجة
-    // المتجمعة في results، ونرجّعه — الملف بيتفتح مرة واحدة بس هنا، لما
-    // المعالجة كلها تكون خلصت، فمفيش أي تأثير على أداء process-step.
+    // بنجيب كل النتايج من job_results (جدول منفصل) كـ JSONB مجمّع، بدل
+    // عمود results القديم في صف الوظيفة.
+    const { data: results, error: resultsErr } = await supabase.rpc('get_job_results', {
+      p_job_id: jobId,
+    });
+    if (resultsErr) throw resultsErr;
+
     const resultBase64 = applyResultsToWorkbook(
       job.original_file_b64,
       job.sheet_name || null,
       job.headers || [],
-      job.results || {},
+      (results as Record<string, string>) || {},
     );
     const bytes = base64ToBytes(resultBase64);
 
