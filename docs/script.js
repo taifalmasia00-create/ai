@@ -22,6 +22,7 @@ const beltStatus = document.getElementById('beltStatus');
 const quotaPause = document.getElementById('quotaPause');
 const quotaPauseText = document.getElementById('quotaPauseText');
 const resumeBtn = document.getElementById('resumeBtn');
+const downloadPartialBtn = document.getElementById('downloadPartialBtn');
 const newApiKeyInput = document.getElementById('newApiKeyInput');
 const useNewKeyBtn = document.getElementById('useNewKeyBtn');
 
@@ -487,10 +488,15 @@ useNewKeyBtn.addEventListener('click', () => {
   pollStep();
 });
 
-// ---------- تحميل الملف النهائي (نفس الملف اللي رفعته، بعد التعديل) ----------
-downloadBtn.addEventListener('click', async () => {
+// ---------- تحميل الملف (نفس الملف اللي رفعته، بعد التعديل) ----------
+// نفس الدالة بتتستخدم في حالتين: زرار "تحميل الملف النهائي" لما الشغلانة
+// تخلص كلها، وزرار "تحميل اللي اتعالج لحد دلوقتي" لو المعالجة وقفت في النص
+// (قطع نت / وصلنا لحد Gemini). الملف على السيرفر بيتحفظ بعد كل صف بيتعالج،
+// يعني حتى لو الشغلانة لسه شغالة، تنزيله بيرجّعلك الأعمدة اللي خلصت فعلاً
+// والباقي لسه فاضي، بدون ما يأثر على استكمال المعالجة بعدين.
+async function downloadFile(triggerBtn) {
   clearError();
-  downloadBtn.disabled = true;
+  triggerBtn.disabled = true;
   try {
     const res = await fetch(`${FN_URL}/download?jobId=${encodeURIComponent(currentJobId)}`, {
       headers: authHeaders(),
@@ -519,6 +525,9 @@ downloadBtn.addEventListener('click', async () => {
   } catch (err) {
     showError(err.message);
   } finally {
-    downloadBtn.disabled = false;
+    triggerBtn.disabled = false;
   }
-});
+}
+
+downloadBtn.addEventListener('click', () => downloadFile(downloadBtn));
+downloadPartialBtn.addEventListener('click', () => downloadFile(downloadPartialBtn));

@@ -601,6 +601,12 @@ textarea::placeholder, input::placeholder, .login-form input::placeholder {
   line-height: 1.7;
 }
 
+.quota-pause-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* ---------- API key swap (inside quota-pause) ---------- */
 .apikey-swap {
   margin-top: 16px;
