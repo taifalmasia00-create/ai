@@ -507,11 +507,21 @@ async function downloadFile(triggerBtn) {
     }
 
     // بناخد اسم الملف من هيدر Content-Disposition اللي بعته السيرفر (نفس
-    // اسم الملف الأصلي غالباً) بدل اسم ثابت
+    // اسم الملف الأصلي غالباً) بدل اسم ثابت. بنفضّل filename*=UTF-8''...
+    // (بيدعم العربي) لو موجود، وإلا بنرجع لـ filename="..." العادي.
     let downloadName = 'نتيجة-المعالجة.xlsx';
     const disposition = res.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename="?([^"]+)"?/);
-    if (match && match[1]) downloadName = match[1];
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match && utf8Match[1]) {
+      try {
+        downloadName = decodeURIComponent(utf8Match[1]);
+      } catch (e) {
+        // فضّل نتجاهل ونستخدم الـ fallback بدل ما نوقع الطلب كله
+      }
+    } else {
+      const asciiMatch = disposition.match(/filename="?([^";]+)"?/);
+      if (asciiMatch && asciiMatch[1]) downloadName = asciiMatch[1];
+    }
 
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
